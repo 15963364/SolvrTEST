@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Holladay Land Eval</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #dcdcd6;
+    --accent: #1f6feb; --warn-bg: #fff4d6; --warn-text: #6a4a00;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--text); background: var(--bg); }
+  #app { display: flex; height: 100%; }
+  #panel { width: 360px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 12px 14px 40px; }
+  #map { flex: 1; min-width: 0; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .sub { color: var(--muted); margin: 0 0 8px; }
+  .warn { background: var(--warn-bg); color: var(--warn-text); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+  label.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+  label.row input[type=number] { width: 72px; }
+  input, select, button { font: inherit; }
+  button { cursor: pointer; border: 1px solid var(--line); background: #fafafa; border-radius: 5px; padding: 5px 9px; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.on { background: #d33; color: #fff; border-color: #d33; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .cite { color: var(--muted); font-size: 11px; }
+  .target { border: 1px solid var(--line); border-left-width: 5px; border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+  .target h3 { margin: 0 0 4px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+  .target table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .target td { padding: 1px 0; vertical-align: top; }
+  .target td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .est { font-size: 10px; font-weight: 700; color: #b00; letter-spacing: .05em; }
+  #status { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+  #status .err { color: #b00; }
+  .legend { background: rgba(255,255,255,.95); padding: 8px 10px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 12px; line-height: 1.6; }
+  .legend i { display: inline-block; width: 18px; height: 12px; margin-right: 6px; vertical-align: -2px; border: 2px solid; }
+  .banner { background: rgba(180,0,0,.9); color: #fff; font-weight: 700; padding: 4px 10px; border-radius: 4px; letter-spacing: .08em; font-size: 12px; }
+  .est-label { background: rgba(255,255,255,.92); border: 1px solid #2e7d32; font-size: 11px; line-height: 1.3; text-align: center; }
+  .est-label b { color: #b00; }
+  .popup table td { padding: 1px 6px 1px 0; }
+  .popup .btns button { padding: 3px 7px; font-size: 12px; }
+  @media (max-width: 760px) {
+    #app { flex-direction: column; }
+    #panel { width: 100%; height: 45%; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px 30px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <h1>Holladay Land Targets</h1>
+    <p class="sub">Parcel B, the Lund pair, and Parcel A: buildable-envelope <b>ESTIMATES</b></p>
+    <div class="warn"><b>Disclaimer:</b> Parcel lines are county GIS approximations, not surveyed boundaries. Zoning (R-1-43) is <i>assumed</i>. The canal buffer is measured from the NHD/traced <i>centerline</i> as a proxy. The real waterway setback (Holladay Code 13.76.400) is measured from the annual high-water line / top of bank, which requires a survey. Every area on this map is an ESTIMATE. It is not a substitute for a survey, title report, or a zoning determination from the City.</div>
+
+    <h2>Targets</h2>
+    <div id="targets"></div>
+    <p class="cite">Click any parcel on the map to tag it as Parcel A, Parcel B, or a Lund pair member. Tags are saved in this browser (localStorage). A tag overrides the automatic match.</p>
+
+    <h2>Setback inputs (R-1-43, assumed)</h2>
+    <div id="zoning"></div>
+
+    <h2>Canal</h2>
+    <label class="row">Canal source
+      <select id="canalSource">
+        <option value="auto">Auto (traced if present, else NHD)</option>
+        <option value="nhd">NHD flowlines only</option>
+        <option value="traced">My traced line only</option>
+      </select>
+    </label>
+    <div class="btns">
+      <button id="traceBtn">Trace canal</button>
+      <button id="traceUndo">Undo point</button>
+      <button id="traceClear">Clear trace</button>
+    </div>
+    <p class="cite" id="traceHelp">Trace mode: click points along the canal centerline, then click "Finish trace". The traced line is saved in this browser.</p>
+
+    <h2>Export</h2>
+    <div class="btns"><button class="primary" id="exportKml">Download KML (Google Earth / onX)</button></div>
+
+    <h2>Data status</h2>
+    <div id="status"></div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+const CONFIG = {
+  center: [40.64878, -111.82808],          // [lat, lon] of the Lund pair's south parcel
+  bboxRadiusM: 600,
+  parcelServices: [
+    'https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/Parcels_Utah_LIR/FeatureServer/0',
+    // Fallback: the county-specific LIR layer from the same UGRC org
+    'https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/Parcels_SaltLake_LIR/FeatureServer/0',
+  ],
+  // USGS NHD MapServer: 6 = Flowline (large scale), 5 = Flowline (small scale)
+  canalServices: [
+    'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6',
+    'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/5',
+  ],
+  canalNamePattern: /east\s+jordan/i,
+  parcelB: { number: '5520', street: /COTTONWOOD/ },
+  parcelA: { minAc: 1.4, maxAc: 2.0 },      // candidate highlight range around ~1.7 ac
+};
+
+// Holladay zoning standards. Sources: Holladay City Code Title 13, Ch. 13.14
+// (R-1 zones), plus the City's R-1 Building Permit Submittal Worksheet. Verify
+// every number with Holladay Community Development (801-527-3890) before relying on it.
+const ZONING = {
+  zone: 'R-1-43',
+  assumed: true,
+  chapter: 'Holladay City Code Title 13, Ch. 13.14 (R-1-4 … R-1-87 Single-Family Residential Zones)',
+  front: {
+    cite: 'HCC 13.14.054 Front Setbacks',
+    largeLotThresholdAc: 1.5,  // lots > 1.5 ac (65,340 sf)
+    largeLotFt: 40,            // fixed 40 ft minimum for lots > 1.5 ac
+    neighborhoodAvgFt: 30,     // EDITABLE: lots <= 1.5 ac use the average of the two neighboring houses' setbacks on each side
+    note: 'Lots of 1.5 ac or less: the front setback is the average of the existing front setbacks of the neighboring houses (nearest and farthest points), measured from the property line. It is a site-specific calculation, so enter your own measured average.',
+  },
+  side: {
+    cite: 'HCC 13.14.050-.053 Side Setbacks (percentage of lot width)',
+    eachPct: 0.10,             // no one side < 10% of lot width
+    combinedPct: 0.25,         // combined sides >= 25% of lot width
+    eachMinFt: 6.5,            // absolute minimum per side
+    combinedMinFt: 13,         // absolute minimum combined
+    note: 'The envelope splits the combined 25% evenly (12.5% per side) because a house position has not been chosen.',
+  },
+  rear: {
+    cite: 'HCC 13.14.052 Rear Setbacks (sliding scale by lot area)',
+    ft: 40,                    // EDITABLE PLACEHOLDER: not verified for lots > 43,560 sf
+    note: 'The rear setback scales with lot area (e.g. <10,000 sf = 20 ft; the worksheet example of a 21,780 sf lot = 34 ft). The value for lots over 1 acre could NOT be verified. 40 ft is a conservative placeholder, so confirm it against the chart.',
+  },
+  canal: {
+    cite: 'HCC 13.76.400 Waterways Protection',
+    bufferFt: 20,
+    note: 'The waterway protection area is 20 ft from a canal, measured from the annual high-water line / top of bank. This map uses the centerline as a proxy, which UNDER-states the real buffer by roughly half the canal width.',
+  },
+};
+
+const COLORS = {
+  parcel: '#8a8a8a',
+  A: '#ff9800',
+  B: '#d500f9',
+  LUND: '#00b8d4',
+  canal: '#1e88e5',
+  buffer: '#e53935',
+  envelope: '#2ecc40',
+  candidate: '#ffb74d',
+  trace: '#ffeb3b',
+};
+
+const TARGETS = [
+  { key: 'B', name: 'Parcel B', desc: '5520 S Cottonwood Ln' },
+  { key: 'LUND', name: 'Lund pair', desc: 'Dissolved: parcel at the pin + its N/NE neighbor' },
+  { key: 'A', name: 'Parcel A', desc: 'Vacant ~1.7 ac lot (tag it on the map)' },
+];
+
+const DIRS = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
+
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+const LS = 'holladayEval.';
+function load(key, dflt) {
+  try { const v = localStorage.getItem(LS + key); return v ? JSON.parse(v) : dflt; } catch { return dflt; }
+}
+function save(key, val) {
+  try { localStorage.setItem(LS + key, JSON.stringify(val)); } catch { /* storage unavailable */ }
+}
+
+const state = {
+  parcels: [],
+  canalNHD: [],            // array of LineString/MultiLineString features
+  canalNHDInfo: '',
+  tags: load('tags', {}),  // parcelId -> 'A' | 'B' | 'LUND' | 'NONE'
+  trace: load('trace', []),// [[lon,lat], ...]
+  tracing: false,
+  settings: Object.assign({
+    frontAvgFt: ZONING.front.neighborhoodAvgFt,
+    rearFt: ZONING.rear.ft,
+    canalBufferFt: ZONING.canal.bufferFt,
+    canalSource: 'auto',
+    front: { A: 'auto', B: 'auto', LUND: 'auto' },
+  }, load('settings', {})),
+  results: {},             // key -> analysis result
+  canalBuffer: null,
+  canalLines: [],
+};
+
+// ---------------------------------------------------------------------------
+// Geometry helpers (Turf 7 takes FeatureCollections for union/difference)
+// ---------------------------------------------------------------------------
+const SQFT_PER_M2 = 10.7639104;
+const M2_PER_AC = 4046.8564224;
+
+function tUnion(features) {
+  const fs = features.filter(Boolean);
+  if (!fs.length) return null;
+  if (fs.length === 1) return fs[0];
+  try { return turf.union(turf.featureCollection(fs)); }
+  catch (e) { // fall back to pairwise union
+    let acc = fs[0];
+    for (let i = 1; i < fs.length; i++) { try { acc = turf.union(turf.featureCollection([acc, fs[i]])) || acc; } catch { /* skip bad geometry */ } }
+    return acc;
+  }
+}
+function tDiff(a, b) {
+  if (!a) return null;
+  if (!b) return a;
+  try { return turf.difference(turf.featureCollection([a, b])); } catch { return a; }
+}
+function tIntersect(a, b) {
+  if (!a || !b) return null;
+  try { return turf.intersect(turf.featureCollection([a, b])); } catch { return null; }
+}
+function areaM2(f) { return f ? turf.area(f) : 0; }
+
+// Local planar projection (meters) around the study center; fine at ~1 km scale.
+const LAT0 = CONFIG.center[0], LON0 = CONFIG.center[1];
+const KX = 111320 * Math.cos(LAT0 * Math.PI / 180), KY = 110574;
+const toXY = ([lon, lat]) => [(lon - LON0) * KX, (lat - LAT0) * KY];
+const toLL = ([x, y]) => [LON0 + x / KX, LAT0 + y / KY];
+
+function polygonsOf(f) {
+  if (!f || !f.geometry) return [];
+  const g = f.geometry;
+  if (g.type === 'Polygon') return [g.coordinates];
+  if (g.type === 'MultiPolygon') return g.coordinates;
+  return [];
+}
+function ringSignedArea(xy) {
+  let s = 0;
+  for (let i = 0; i < xy.length - 1; i++) s += xy[i][0] * xy[i + 1][1] - xy[i + 1][0] * xy[i][1];
+  return s / 2;
+}
+// Outer-ring edges with outward unit normals in planar space.
+function outerEdges(f) {
+  const edges = [];
+  for (const poly of polygonsOf(f)) {
+    const ring = poly[0];
+    const xy = ring.map(toXY);
+    const ccw = ringSignedArea(xy) > 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const [x1, y1] = xy[i], [x2, y2] = xy[i + 1];
+      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+      if (len < 0.05) continue;
+      // For a CCW ring the outward normal is (dy, -dx); flip for CW.
+      let nx = dy / len, ny = -dx / len;
+      if (!ccw) { nx = -nx; ny = -ny; }
+      edges.push({ a: ring[i], b: ring[i + 1], xa: [x1, y1], xb: [x2, y2], len, n: [nx, ny] });
+    }
+  }
+  return edges;
+}
+function dirVec(deg) { const r = deg * Math.PI / 180; return [Math.sin(r), Math.cos(r)]; }
+function vecToCompass(v) {
+  const deg = (Math.atan2(v[0], v[1]) * 180 / Math.PI + 360) % 360;
+  return Object.keys(DIRS)[Math.round(deg / 45) % 8];
+}
+
+// ---------------------------------------------------------------------------
+// Parcel field access (LIR schema: PARCEL_ID, PARCEL_ADD, PARCEL_ACRES, ...)
+// ---------------------------------------------------------------------------
+function pick(p, names) {
+  if (!p) return undefined;
+  for (const n of names) if (p[n] !== undefined && p[n] !== null && p[n] !== '') return p[n];
+  const lower = Object.fromEntries(Object.keys(p).map(k => [k.toLowerCase(), k]));
+  for (const n of names) { const k = lower[n.toLowerCase()]; if (k && p[k] !== null && p[k] !== '') return p[k]; }
+  return undefined;
+}
+const pid = f => String(pick(f.properties, ['PARCEL_ID', 'SERIAL_NUM', 'PARCELID', 'OBJECTID']) ?? f.id ?? '');
+const paddr = f => String(pick(f.properties, ['PARCEL_ADD', 'ADDRESS', 'SITUS_ADDR', 'PROP_ADDR']) ?? '');
+const pcity = f => String(pick(f.properties, ['PARCEL_CITY']) ?? '');
+const pacresLIR = f => { const v = Number(pick(f.properties, ['PARCEL_ACRES', 'ACRES', 'GIS_ACRES'])); return isFinite(v) && v > 0 ? v : null; };
+const pacresGIS = f => areaM2(f) / M2_PER_AC;
+function normAddr(s) { return String(s).toUpperCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function isParcelB(f) {
+  const a = normAddr(paddr(f));
+  return new RegExp('^' + CONFIG.parcelB.number + '\\b').test(a) && CONFIG.parcelB.street.test(a);
+}
+function likelyVacant(f) {
+  const p = f.properties;
+  const bldg = Number(pick(p, ['BLDG_SQFT']));
+  const yr = Number(pick(p, ['BUILT_YR']));
+  const cls = String(pick(p, ['PROP_CLASS']) ?? '');
+  if (/vacant/i.test(cls)) return true;
+  return (!bldg || bldg === 0) && (!yr || yr === 0);
+}
+
+// ---------------------------------------------------------------------------
+// Data fetch
+// ---------------------------------------------------------------------------
+function studyBbox() {
+  const [lat, lon] = CONFIG.center;
+  const dLat = CONFIG.bboxRadiusM / 110574;
+  const dLon = CONFIG.bboxRadiusM / (111320 * Math.cos(lat * Math.PI / 180));
+  return [lon - dLon, lat - dLat, lon + dLon, lat + dLat];
+}
+
+async function arcgisQuery(layerUrl, bbox, { paginate = true, format = 'geojson' } = {}) {
+  const out = [];
+  let offset = 0;
+  for (let page = 0; page < 25; page++) {
+    const params = new URLSearchParams({
+      where: '1=1', geometry: bbox.join(','), geometryType: 'esriGeometryEnvelope', inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', outFields: '*', returnGeometry: 'true', outSR: '4326', f: format,
+    });
+    if (paginate) { params.set('resultOffset', offset); params.set('resultRecordCount', 1000); }
+    const res = await fetch(layerUrl + '/query?' + params);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
+    const feats = format === 'geojson' ? (j.features || []) : esriJsonToGeoJSON(j);
+    out.push(...feats);
+    const more = j.exceededTransferLimit || (j.properties && j.properties.exceededTransferLimit);
+    if (!paginate || !more || !feats.length) break;
+    offset += feats.length;
+  }
+  return out;
+}
+
+// Minimal Esri JSON -> GeoJSON for polylines/polygons (for services lacking f=geojson).
+function esriJsonToGeoJSON(j) {
+  return (j.features || []).map(ef => {
+    const g = ef.geometry || {};
+    let geometry = null;
+    if (g.paths) geometry = g.paths.length === 1 ? { type: 'LineString', coordinates: g.paths[0] } : { type: 'MultiLineString', coordinates: g.paths };
+    else if (g.rings) geometry = { type: 'Polygon', coordinates: g.rings };
+    return { type: 'Feature', properties: ef.attributes || {}, geometry };
+  }).filter(f => f.geometry);
+}
+
+async function loadParcels() {
+  const bbox = studyBbox();
+  for (const url of CONFIG.parcelServices) {
+    try {
+      log(`Parcels: querying ${shortUrl(url)} …`);
+      const feats = (await arcgisQuery(url, bbox)).filter(f => f.geometry && /Polygon/.test(f.geometry.type));
+      if (feats.length) { log(`Parcels: ${feats.length} loaded from ${shortUrl(url)}`); return feats; }
+      log(`Parcels: 0 features from ${shortUrl(url)}`);
+    } catch (e) { log(`Parcels: ${shortUrl(url)} failed: ${e.message}`, true); }
+  }
+  return [];
+}
+
+async function loadCanal() {
+  const bbox = studyBbox();
+  for (const url of CONFIG.canalServices) {
+    for (const format of ['geojson', 'json']) {
+      try {
+        const feats = (await arcgisQuery(url, bbox, { paginate: false, format }))
+          .filter(f => f.geometry && /LineString/.test(f.geometry.type));
+        const canals = feats.filter(f => {
+          const p = f.properties;
+          const ft = Number(pick(p, ['ftype', 'FTYPE', 'FType']));
+          const fc = Number(pick(p, ['fcode', 'FCODE', 'FCode']));
+          const nm = String(pick(p, ['gnis_name', 'GNIS_NAME', 'GNISNAME']) ?? '');
+          return ft === 336 || (fc >= 33600 && fc < 33700) || /canal|ditch/i.test(nm);
+        });
+        const named = canals.filter(f => CONFIG.canalNamePattern.test(String(pick(f.properties, ['gnis_name', 'GNIS_NAME']) ?? '')));
+        if (named.length) return { feats: named, info: `NHD: ${named.length} East Jordan Canal segment(s) from ${shortUrl(url)}` };
+        if (canals.length) return { feats: canals, info: `NHD: ${canals.length} canal/ditch segment(s) from ${shortUrl(url)} (none named "East Jordan", so check the line against imagery)` };
+        log(`Canal: ${shortUrl(url)} (${format}) returned ${feats.length} flowlines, none canal/ditch`);
+        break; // the format worked but had no canals; try the next layer
+      } catch (e) { log(`Canal: ${shortUrl(url)} (${format}) failed: ${e.message}`, true); }
+    }
+  }
+  return { feats: [], info: 'NHD: no usable canal/ditch features. Use "Trace canal".' };
+}
+
+// ---------------------------------------------------------------------------
+// Target resolution
+// ---------------------------------------------------------------------------
+function autoLundMembers() {
+  const pt = turf.point([CONFIG.center[1], CONFIG.center[0]]);
+  const base = state.parcels.find(f => { try { return turf.booleanPointInPolygon(pt, f); } catch { return false; } });
+  if (!base) return { members: [], note: 'No parcel contains the Lund pin.' };
+  const baseBuf = turf.buffer(base, 1.5, { units: 'meters' });
+  const baseC = turf.centroid(base);
+  let best = null;
+  for (const f of state.parcels) {
+    if (f === base || !bboxOverlap(f, baseBuf)) continue;
+    const contact = tIntersect(baseBuf, f);
+    const contactM2 = areaM2(contact);
+    if (contactM2 < 1) continue;
+    const brg = turf.bearing(baseC, turf.centroid(f));        // -180..180, 0 = north
+    const diff = Math.abs(((brg - 22.5 + 540) % 360) - 180);    // angle from NNE
+    if (diff > 70) continue;
+    const score = contactM2 * Math.cos(diff * Math.PI / 180);
+    if (!best || score > best.score) best = { f, score, brg };
+  }
+  const members = best ? [base, best.f] : [base];
+  const note = best
+    ? `Auto: ${pid(base)} (contains pin) + ${pid(best.f)} (neighbor at bearing ${best.brg.toFixed(0)}°)`
+    : `Auto: ${pid(base)} only (no N/NE neighbor found)`;
+  return { members, note };
+}
+
+function bboxOverlap(a, b) {
+  const [a0, a1, a2, a3] = turf.bbox(a), [b0, b1, b2, b3] = turf.bbox(b);
+  return a0 <= b2 && a2 >= b0 && a1 <= b3 && a3 >= b1;
+}
+
+function resolveTargets() {
+  const tagged = key => state.parcels.filter(f => state.tags[pid(f)] === key);
+  const untagged = f => !state.tags[pid(f)];
+  const out = {};
+  let m = tagged('B');
+  out.B = m.length ? { members: m, note: 'Tagged manually' }
+    : { members: state.parcels.filter(f => untagged(f) && isParcelB(f)), note: `Auto: address matches ${CONFIG.parcelB.number} … COTTONWOOD` };
+  m = tagged('LUND');
+  if (m.length) out.LUND = { members: m, note: 'Tagged manually' };
+  else { const auto = autoLundMembers(); out.LUND = { members: auto.members.filter(untagged), note: auto.note }; }
+  m = tagged('A');
+  out.A = { members: m, note: m.length ? 'Tagged manually' : 'Not tagged yet. Click a parcel on the map and choose "Parcel A".' };
+  return out;
+}
+
+function dissolve(members) {
+  if (!members.length) return null;
+  if (members.length === 1) return turf.feature(members[0].geometry);
+  let u = tUnion(members.map(f => turf.feature(f.geometry)));
+  // Close hairline slivers between adjacent GIS polygons.
+  if (u && u.geometry.type === 'MultiPolygon') {
+    try {
+      const grown = turf.buffer(u, 0.3, { units: 'meters' });
+      const shrunk = turf.buffer(grown, -0.3, { units: 'meters' });
+      if (shrunk && Math.abs(areaM2(shrunk) - areaM2(u)) / areaM2(u) < 0.01) u = shrunk;
+    } catch { /* keep raw union */ }
+  }
+  return u;
+}
+
+// ---------------------------------------------------------------------------
+// Analysis
+// ---------------------------------------------------------------------------
+function buildCanal() {
+  const src = state.settings.canalSource;
+  const traced = state.trace.length >= 2 ? [turf.lineString(state.trace, { source: 'Traced by user' })] : [];
+  const nhd = state.canalNHD;
+  let lines;
+  if (src === 'traced') lines = traced;
+  else if (src === 'nhd') lines = nhd;
+  else lines = traced.length ? traced : nhd;
+  const bbox = studyBbox();
+  lines = lines.map(l => turf.bboxClip(l, bbox)).filter(l => l.geometry && l.geometry.coordinates.length);
+  state.canalLines = lines;
+  const bufs = lines.map(l => { try { return turf.buffer(l, state.settings.canalBufferFt, { units: 'feet' }); } catch { return null; } });
+  state.canalBuffer = tUnion(bufs.filter(Boolean));
+}
+
+// Detect street frontage: edges whose outward side is not covered by another parcel
+// (road right-of-way is unparceled) and is not the canal corridor.
+function autoFrontVector(poly, memberIds) {
+  const others = state.parcels.filter(f => !memberIds.has(pid(f)));
+  const polyBbox = turf.bbox(turf.buffer(poly, 15, { units: 'meters' }));
+  const nearby = others.filter(f => { const b = turf.bbox(f); return b[0] <= polyBbox[2] && b[2] >= polyBbox[0] && b[1] <= polyBbox[3] && b[3] >= polyBbox[1]; });
+  // Accumulate frontage length per compass octant; the longest octant is the front.
+  const bins = Array.from({ length: 8 }, () => ({ len: 0, x: 0, y: 0 }));
+  for (const e of outerEdges(poly)) {
+    if (e.len < 3) continue;
+    const mx = (e.xa[0] + e.xb[0]) / 2, my = (e.xa[1] + e.xb[1]) / 2;
+    const probe = turf.point(toLL([mx + e.n[0] * 6, my + e.n[1] * 6]));
+    if (nearby.some(f => turf.booleanPointInPolygon(probe, f))) continue;
+    if (state.canalLines.some(l => { try { return turf.pointToLineDistance(probe, l, { units: 'meters' }) < 12; } catch { return false; } })) continue;
+    const deg = (Math.atan2(e.n[0], e.n[1]) * 180 / Math.PI + 360) % 360;
+    const b = bins[Math.round(deg / 45) % 8];
+    b.len += e.len; b.x += e.n[0] * e.len; b.y += e.n[1] * e.len;
+  }
+  const i = bins.reduce((best, b, k) => (b.len > bins[best].len ? k : best), 0);
+  const b = bins[i];
+  if (!b.len) return null;
+  const L = Math.hypot(b.x, b.y);
+  return { v: [b.x / L, b.y / L], doubleFrontage: bins[(i + 4) % 8].len > 0.5 * b.len };
+}
+
+function analyze(key, target) {
+  const poly = dissolve(target.members);
+  if (!poly) return { key, poly: null, note: target.note };
+  const lotM2 = areaM2(poly);
+  const lotAc = lotM2 / M2_PER_AC;
+  const lotSqft = lotM2 * SQFT_PER_M2;
+  const lirAc = target.members.reduce((s, f) => s + (pacresLIR(f) || 0), 0) || null;
+
+  // Front direction
+  const choice = state.settings.front[key] || 'auto';
+  let fv, frontLabel;
+  if (choice === 'auto') {
+    const auto = autoFrontVector(poly, new Set(target.members.map(pid)));
+    fv = auto ? auto.v : dirVec(180);
+    frontLabel = !auto ? 'auto: no frontage found, so assumed S'
+      : `auto (faces ${vecToCompass(fv)})${auto.doubleFrontage ? '; street on the opposite side too, so check this' : ''}`;
+  } else { fv = dirVec(DIRS[choice]); frontLabel = `faces ${choice} (manual)`; }
+
+  // Lot width = extent perpendicular to the front direction
+  const side = [fv[1], -fv[0]];
+  const proj = polygonsOf(poly).flatMap(p => p[0].map(toXY)).map(([x, y]) => x * side[0] + y * side[1]);
+  const widthFt = (Math.max(...proj) - Math.min(...proj)) * 3.28084;
+
+  const Z = ZONING;
+  const frontFt = lotAc > Z.front.largeLotThresholdAc ? Z.front.largeLotFt : state.settings.frontAvgFt;
+  const frontRule = lotAc > Z.front.largeLotThresholdAc ? `> ${Z.front.largeLotThresholdAc} ac, fixed ${Z.front.largeLotFt} ft` : 'neighborhood average (your input)';
+  const sideFt = Math.max(Z.side.eachPct * widthFt, Z.side.eachMinFt, Z.side.combinedPct * widthFt / 2, Z.side.combinedMinFt / 2);
+  const rearFt = state.settings.rearFt;
+
+  // Envelope = lot minus per-edge setback strips minus canal buffer
+  const cos45 = Math.SQRT1_2;
+  let env = poly;
+  for (const e of outerEdges(poly)) {
+    const c = e.n[0] * fv[0] + e.n[1] * fv[1];
+    const d = c >= cos45 ? frontFt : c <= -cos45 ? rearFt : sideFt;
+    const strip = turf.buffer(turf.lineString([e.a, e.b]), d, { units: 'feet' });
+    env = tDiff(env, strip);
+    if (!env) break;
+  }
+  const canalInLot = tIntersect(poly, state.canalBuffer);
+  if (env) env = tDiff(env, state.canalBuffer);
+
+  const envSqft = areaM2(env) * SQFT_PER_M2;
+  return {
+    key, poly, env, canalInLot, note: target.note,
+    ids: target.members.map(pid), addrs: target.members.map(paddr).filter(Boolean),
+    lotAc, lotSqft, lirAc, widthFt, frontFt, frontRule, frontLabel, sideFt, rearFt,
+    canalSqft: areaM2(canalInLot) * SQFT_PER_M2,
+    envSqft, envPct: lotSqft ? envSqft / lotSqft * 100 : 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+const map = L.map('map', { zoomControl: true, doubleClickZoom: false }).setView(CONFIG.center, 17);
+const esri = (svc, opts = {}) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`,
+  Object.assign({ maxZoom: 21, maxNativeZoom: 19, attribution: 'Tiles &copy; Esri and its data providers' }, opts));
+const baseImagery = esri('World_Imagery');
+const baseTopo = esri('World_Topo_Map');
+const baseHillshade = L.layerGroup([esri('World_Imagery'), esri('Elevation/World_Hillshade', { opacity: 0.5, maxNativeZoom: 16 })]);
+baseImagery.addTo(map);
+
+const layers = {
+  parcels: L.featureGroup().addTo(map),
+  candidates: L.featureGroup().addTo(map),
+  canal: L.featureGroup().addTo(map),
+  buffer: L.featureGroup().addTo(map),
+  envelopes: L.featureGroup().addTo(map),
+  targets: L.featureGroup().addTo(map),
+  trace: L.featureGroup().addTo(map),
+};
+L.control.layers(
+  { 'Esri World Imagery': baseImagery, 'Esri World Topo': baseTopo, 'Imagery + Hillshade (50%)': baseHillshade },
+  {
+    'Parcels (LIR)': layers.parcels,
+    'Parcel A candidates (1.4–2.0 ac, likely vacant)': layers.candidates,
+    'Canal (NHD / traced)': layers.canal,
+    'Canal buffer (ESTIMATE)': layers.buffer,
+    'Buildable envelopes (ESTIMATE)': layers.envelopes,
+    'Target outlines': layers.targets,
+    'Trace in progress': layers.trace,
+  },
+  { collapsed: false }
+).addTo(map);
+L.control.scale({ imperial: true, metric: true }).addTo(map);
+
+const banner = L.control({ position: 'topleft' });
+banner.onAdd = () => { const d = L.DomUtil.create('div', 'banner'); d.textContent = 'ALL SHADED AREAS ARE ESTIMATES'; return d; };
+banner.addTo(map);
+
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div', 'legend');
+  const sw = (border, fill, dash) => `<i style="border-color:${border};background:${fill || 'transparent'};${dash ? 'border-style:dashed' : ''}"></i>`;
+  d.innerHTML = `<b>Legend</b><br>
+    ${sw(COLORS.parcel)}Parcel (GIS approx.)<br>
+    ${sw(COLORS.B)}Parcel B<br>
+    ${sw(COLORS.LUND)}Lund pair (dissolved)<br>
+    ${sw(COLORS.A)}Parcel A (your tag)<br>
+    ${sw(COLORS.candidate, null, true)}Parcel A candidate<br>
+    <i style="border:0;border-top:3px solid ${COLORS.canal};height:0"></i>Canal centerline<br>
+    ${sw(COLORS.buffer, COLORS.buffer + '88')}Canal buffer (${state.settings.canalBufferFt} ft) <span class="est">ESTIMATE</span><br>
+    ${sw(COLORS.envelope, COLORS.envelope + '88')}Buildable envelope <span class="est">ESTIMATE</span>`;
+  L.DomEvent.disableClickPropagation(d);
+  return d;
+};
+legend.addTo(map);
+
+function drawParcels() {
+  layers.parcels.clearLayers();
+  layers.candidates.clearLayers();
+  for (const f of state.parcels) {
+    const lyr = L.geoJSON(f, { style: { color: COLORS.parcel, weight: 1, opacity: 0.9, fill: true, fillOpacity: 0 } });
+    lyr.on('click', e => {
+      if (state.tracing) return; // map click handler adds the trace vertex
+      L.popup().setLatLng(e.latlng).setContent(parcelPopup(f)).openOn(map);
+    });
+    lyr.addTo(layers.parcels);
+    const ac = pacresLIR(f) ?? pacresGIS(f);
+    if (ac >= CONFIG.parcelA.minAc && ac <= CONFIG.parcelA.maxAc && likelyVacant(f)) {
+      L.geoJSON(f, { interactive: false, style: { color: COLORS.candidate, weight: 2, dashArray: '6 5', fill: false } }).addTo(layers.candidates);
+    }
+  }
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+function parcelPopup(f) {
+  const id = pid(f);
+  const tag = state.tags[id];
+  const lir = pacresLIR(f);
+  const p = f.properties;
+  const extra = [['Prop class', pick(p, ['PROP_CLASS'])], ['Bldg sq ft', pick(p, ['BLDG_SQFT'])], ['Built', pick(p, ['BUILT_YR'])], ['Mkt value', pick(p, ['TOTAL_MKT_VALUE'])]]
+    .filter(([, v]) => v !== undefined).map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join('');
+  const btn = (t, label) => `<button onclick="tagParcel(${esc(JSON.stringify(id))},'${t}')" ${tag === t ? 'class="primary"' : ''}>${label}</button>`;
+  return `<div class="popup"><table>
+    <tr><td>Parcel ID</td><td><b>${esc(id)}</b></td></tr>
+    <tr><td>Address</td><td>${esc(paddr(f) || '—')} ${esc(pcity(f))}</td></tr>
+    <tr><td>Acres (LIR)</td><td>${lir != null ? lir.toFixed(3) : '—'}</td></tr>
+    <tr><td>Acres (GIS calc)</td><td>${pacresGIS(f).toFixed(3)}</td></tr>${extra}
+    <tr><td>Tag</td><td>${tag ? esc(tag === 'NONE' ? 'excluded from auto' : tag) : 'none'}</td></tr></table>
+    <div class="btns">${btn('A', 'Parcel A')}${btn('B', 'Parcel B')}${btn('LUND', 'Lund pair')}${btn('NONE', 'Exclude')}
+    <button onclick="tagParcel(${esc(JSON.stringify(id))},null)">Clear tag</button></div></div>`;
+}
+
+window.tagParcel = (id, tag) => {
+  if (tag) state.tags[id] = tag; else delete state.tags[id];
+  save('tags', state.tags);
+  map.closePopup();
+  runAnalysis();
+};
+
+function fmt(n, d = 0) { return n == null || !isFinite(n) ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }); }
+
+function drawAnalysis() {
+  layers.canal.clearLayers(); layers.buffer.clearLayers(); layers.envelopes.clearLayers(); layers.targets.clearLayers();
+  for (const l of state.canalLines) L.geoJSON(l, { interactive: false, style: { color: COLORS.canal, weight: 3 } }).addTo(layers.canal);
+  if (state.canalBuffer) {
+    L.geoJSON(state.canalBuffer, { interactive: false, style: { color: COLORS.buffer, weight: 1, fillColor: COLORS.buffer, fillOpacity: 0.4 } }).addTo(layers.buffer);
+    // Anchor the label 15% along the first canal line, away from the target labels.
+    const first = state.canalLines[0];
+    const seg = first.geometry.type === 'MultiLineString' ? turf.lineString(first.geometry.coordinates[0]) : first;
+    const c = turf.along(seg, turf.length(seg) * 0.15).geometry.coordinates;
+    L.tooltip({ permanent: true, direction: 'top', offset: [0, -8], className: 'est-label', interactive: false })
+      .setLatLng([c[1], c[0]]).setContent(`<b>ESTIMATE</b><br>${state.settings.canalBufferFt} ft canal buffer<br>(from centerline)`).addTo(layers.buffer);
+  }
+  for (const t of TARGETS) {
+    const r = state.results[t.key];
+    if (!r || !r.poly) continue;
+    L.geoJSON(r.poly, { interactive: false, style: { color: COLORS[t.key], weight: 3, fill: false } }).addTo(layers.targets);
+    if (r.env && areaM2(r.env) > 0) {
+      L.geoJSON(r.env, { interactive: false, style: { color: '#1b7f2a', weight: 1, fillColor: COLORS.envelope, fillOpacity: 0.45 } }).addTo(layers.envelopes);
+      const c = turf.pointOnFeature(r.env).geometry.coordinates;
+      L.tooltip({ permanent: true, direction: 'center', className: 'est-label', interactive: false })
+        .setLatLng([c[1], c[0]])
+        .setContent(`<b>ESTIMATE</b> · ${t.name}<br>Buildable ≈ ${fmt(r.envSqft)} sq ft<br>${fmt(r.envPct, 1)}% of ${fmt(r.lotAc, 2)} ac lot`)
+        .addTo(layers.envelopes);
+    }
+  }
+}
+
+function drawTrace() {
+  layers.trace.clearLayers();
+  if (!state.trace.length) return;
+  const ll = state.trace.map(([lon, lat]) => [lat, lon]);
+  L.polyline(ll, { color: COLORS.trace, weight: 3, dashArray: state.tracing ? '6 4' : null, interactive: false }).addTo(layers.trace);
+  for (const p of ll) L.circleMarker(p, { radius: 4, color: '#000', weight: 1, fillColor: COLORS.trace, fillOpacity: 1, interactive: false }).addTo(layers.trace);
+}
+
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
+function renderZoning() {
+  const Z = ZONING, s = state.settings;
+  document.getElementById('zoning').innerHTML = `
+    <p class="cite">Zone <b>${Z.zone}</b> (ASSUMED). ${esc(Z.chapter)}</p>
+    <label class="row">Front: neighborhood avg (ft) <input type="number" id="frontAvg" min="0" step="0.5" value="${s.frontAvgFt}"></label>
+    <p class="cite">${esc(Z.front.cite)}. Lots over ${Z.front.largeLotThresholdAc} ac use a fixed ${Z.front.largeLotFt} ft. ${esc(Z.front.note)}</p>
+    <label class="row">Rear (ft) <input type="number" id="rearFt" min="0" step="0.5" value="${s.rearFt}"></label>
+    <p class="cite">${esc(Z.rear.cite)}. ${esc(Z.rear.note)}</p>
+    <label class="row">Side</label>
+    <p class="cite">${esc(Z.side.cite)}: each side ≥ ${Z.side.eachPct * 100}% of lot width and ≥ ${Z.side.eachMinFt} ft; combined ≥ ${Z.side.combinedPct * 100}% and ≥ ${Z.side.combinedMinFt} ft. ${esc(Z.side.note)}</p>
+    <label class="row">Canal buffer (ft) <input type="number" id="canalBuf" min="0" step="1" value="${s.canalBufferFt}"></label>
+    <p class="cite">${esc(Z.canal.cite)}. ${esc(Z.canal.note)}</p>
+    <p class="cite">Not modeled: corner-lot second front yards, private-driveway setbacks (13.14.060), the building-height corridor, easements, and slopes.</p>`;
+  const bind = (id, key) => document.getElementById(id).addEventListener('change', e => {
+    const v = parseFloat(e.target.value);
+    if (!isFinite(v) || v < 0) return;
+    s[key] = v; save('settings', s);
+    if (key === 'canalBufferFt') { legend.remove(); legend.addTo(map); }
+    runAnalysis();
+  });
+  bind('frontAvg', 'frontAvgFt'); bind('rearFt', 'rearFt'); bind('canalBuf', 'canalBufferFt');
+}
+
+function renderTargets() {
+  const el = document.getElementById('targets');
+  el.innerHTML = TARGETS.map(t => {
+    const r = state.results[t.key] || {};
+    const sel = state.settings.front[t.key] || 'auto';
+    const opts = ['auto', ...Object.keys(DIRS)].map(d => `<option value="${d}" ${d === sel ? 'selected' : ''}>${d === 'auto' ? 'Auto (street frontage)' : 'Faces ' + d}</option>`).join('');
+    const body = r.poly ? `
+      <table>
+        <tr><td>Parcel ID(s)</td><td>${esc(r.ids.join(', '))}</td></tr>
+        ${r.addrs.length ? `<tr><td>Address</td><td>${esc(r.addrs.join('; '))}</td></tr>` : ''}
+        <tr><td>Lot area (GIS calc)</td><td>${fmt(r.lotAc, 3)} ac · ${fmt(r.lotSqft)} sf</td></tr>
+        <tr><td>Acres (LIR sum)</td><td>${fmt(r.lirAc, 3)}</td></tr>
+        <tr><td>Front</td><td>${esc(r.frontLabel)}</td></tr>
+        <tr><td>Lot width (⊥ front)</td><td>${fmt(r.widthFt)} ft</td></tr>
+        <tr><td>Setbacks F / S / R</td><td>${fmt(r.frontFt, 1)} / ${fmt(r.sideFt, 1)} / ${fmt(r.rearFt, 1)} ft</td></tr>
+        <tr><td colspan="2" class="cite">Front rule: ${esc(r.frontRule)}</td></tr>
+        <tr><td>Canal buffer in lot</td><td>${fmt(r.canalSqft)} sf</td></tr>
+        <tr><td><b>Buildable</b> <span class="est">ESTIMATE</span></td><td><b>${fmt(r.envSqft)} sf · ${fmt(r.envPct, 1)}%</b></td></tr>
+      </table>` : '';
+    return `<div class="target" style="border-left-color:${COLORS[t.key]}">
+      <h3>${t.name} <button data-zoom="${t.key}" ${r.poly ? '' : 'disabled'}>Zoom</button></h3>
+      <div class="cite">${esc(t.desc)}<br>${esc(r.note || '')}</div>
+      <label class="row">Front of lot <select data-front="${t.key}">${opts}</select></label>
+      ${body}</div>`;
+  }).join('');
+  el.querySelectorAll('select[data-front]').forEach(s => s.addEventListener('change', e => {
+    state.settings.front[e.target.dataset.front] = e.target.value; save('settings', state.settings); runAnalysis();
+  }));
+  el.querySelectorAll('button[data-zoom]').forEach(b => b.addEventListener('click', () => {
+    const r = state.results[b.dataset.zoom]; if (r && r.poly) map.fitBounds(L.geoJSON(r.poly).getBounds(), { padding: [40, 40] });
+  }));
+}
+
+const statusLines = [];
+function log(msg, err = false) {
+  statusLines.push({ msg, err });
+  document.getElementById('status').innerHTML = statusLines.map(l => `<div class="${l.err ? 'err' : ''}">${esc(l.msg)}</div>`).join('');
+}
+function shortUrl(u) { return u.replace(/^https:\/\/[^/]+\//, '').replace(/\/(Feature|Map)Server/, ''); }
+
+// ---------------------------------------------------------------------------
+// Canal tracing
+// ---------------------------------------------------------------------------
+const traceBtn = document.getElementById('traceBtn');
+function setTracing(on) {
+  state.tracing = on;
+  traceBtn.textContent = on ? 'Finish trace' : 'Trace canal';
+  traceBtn.classList.toggle('on', on);
+  map.getContainer().style.cursor = on ? 'crosshair' : '';
+  drawTrace();
+  if (!on) { save('trace', state.trace); runAnalysis(); }
+}
+traceBtn.addEventListener('click', () => setTracing(!state.tracing));
+document.getElementById('traceUndo').addEventListener('click', () => { state.trace.pop(); save('trace', state.trace); drawTrace(); if (!state.tracing) runAnalysis(); });
+document.getElementById('traceClear').addEventListener('click', () => {
+  if (state.trace.length && !confirm('Clear the traced canal line?')) return;
+  state.trace = []; save('trace', state.trace); drawTrace(); if (!state.tracing) runAnalysis();
+});
+map.on('click', e => {
+  if (!state.tracing) return;
+  state.trace.push([+e.latlng.lng.toFixed(7), +e.latlng.lat.toFixed(7)]);
+  drawTrace();
+});
+const canalSel = document.getElementById('canalSource');
+canalSel.value = state.settings.canalSource;
+canalSel.addEventListener('change', () => { state.settings.canalSource = canalSel.value; save('settings', state.settings); runAnalysis(); });
+
+// ---------------------------------------------------------------------------
+// KML export
+// ---------------------------------------------------------------------------
+function kmlColor(hex, alpha) { // KML is aabbggrr
+  const h = hex.replace('#', '');
+  return alpha + h.slice(4, 6) + h.slice(2, 4) + h.slice(0, 2);
+}
+function xml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c])); }
+const coordStr = cs => cs.map(c => `${c[0].toFixed(7)},${c[1].toFixed(7)},0`).join(' ');
+function kmlGeom(g) {
+  if (!g) return '';
+  const poly = rings => `<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>${coordStr(rings[0])}</coordinates></LinearRing></outerBoundaryIs>${rings.slice(1).map(r => `<innerBoundaryIs><LinearRing><coordinates>${coordStr(r)}</coordinates></LinearRing></innerBoundaryIs>`).join('')}</Polygon>`;
+  const line = cs => `<LineString><tessellate>1</tessellate><coordinates>${coordStr(cs)}</coordinates></LineString>`;
+  switch (g.type) {
+    case 'Polygon': return poly(g.coordinates);
+    case 'MultiPolygon': return `<MultiGeometry>${g.coordinates.map(poly).join('')}</MultiGeometry>`;
+    case 'LineString': return line(g.coordinates);
+    case 'MultiLineString': return `<MultiGeometry>${g.coordinates.map(line).join('')}</MultiGeometry>`;
+    default: return '';
+  }
+}
+function placemark(name, desc, style, feature) {
+  const g = kmlGeom(feature && feature.geometry);
+  return g ? `<Placemark><name>${xml(name)}</name><description>${xml(desc)}</description><styleUrl>#${style}</styleUrl>${g}</Placemark>` : '';
+}
+function style(id, line, width, fill, fillAlpha) {
+  return `<Style id="${id}"><LineStyle><color>${kmlColor(line, 'ff')}</color><width>${width}</width></LineStyle>` +
+    `<PolyStyle><color>${kmlColor(fill || line, fillAlpha || '00')}</color><fill>${fillAlpha ? 1 : 0}</fill><outline>1</outline></PolyStyle></Style>`;
+}
+function exportKml() {
+  const disclaimer = 'ESTIMATE. Parcel lines are GIS approximations. Canal buffer measured from centerline proxy; the real setback requires a surveyed high-water line (Holladay Code 13.76.400). Zoning R-1-43 assumed.';
+  const parts = [];
+  parts.push(style('parcel', COLORS.parcel, 1), style('A', COLORS.A, 3), style('B', COLORS.B, 3), style('LUND', COLORS.LUND, 3),
+    style('canal', COLORS.canal, 3), style('buffer', COLORS.buffer, 1, COLORS.buffer, '66'), style('envelope', '#1b7f2a', 1, COLORS.envelope, '73'));
+  parts.push('<Folder><name>Parcels (LIR, GIS approx.)</name>' + state.parcels.map(f =>
+    placemark(`${pid(f)} ${paddr(f)}`.trim(), `Parcel ${pid(f)} | ${paddr(f)} | ${fmt(pacresLIR(f) ?? pacresGIS(f), 3)} ac`, 'parcel', f)).join('') + '</Folder>');
+  parts.push('<Folder><name>Targets</name>' + TARGETS.map(t => {
+    const r = state.results[t.key];
+    return r && r.poly ? placemark(t.name, `${r.ids.join(', ')} | ${fmt(r.lotAc, 3)} ac (GIS calc)`, t.key, r.poly) : '';
+  }).join('') + '</Folder>');
+  parts.push('<Folder><name>Canal</name>' + state.canalLines.map((l, i) => placemark(`Canal centerline ${i + 1}`, String(pick(l.properties, ['gnis_name', 'GNIS_NAME', 'source']) ?? 'East Jordan Canal (NHD)'), 'canal', l)).join('') + '</Folder>');
+  parts.push('<Folder><name>Canal buffer ESTIMATE</name>' + (state.canalBuffer ? placemark(`ESTIMATE ${state.settings.canalBufferFt} ft canal buffer`, disclaimer, 'buffer', state.canalBuffer) : '') + '</Folder>');
+  parts.push('<Folder><name>Buildable envelopes ESTIMATE</name>' + TARGETS.map(t => {
+    const r = state.results[t.key];
+    return r && r.env ? placemark(`ESTIMATE ${t.name} buildable`, `${fmt(r.envSqft)} sq ft (${fmt(r.envPct, 1)}% of lot). Setbacks F/S/R ${fmt(r.frontFt, 1)}/${fmt(r.sideFt, 1)}/${fmt(r.rearFt, 1)} ft. ${disclaimer}`, 'envelope', r.env) : '';
+  }).join('') + '</Folder>');
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Holladay land targets (ESTIMATE)</name><description>${xml(disclaimer)}</description>
+${parts.join('\n')}
+</Document></kml>`;
+  const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'holladay-land-targets.kml';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+document.getElementById('exportKml').addEventListener('click', exportKml);
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+function runAnalysis() {
+  buildCanal();
+  const targets = resolveTargets();
+  state.results = {};
+  for (const t of TARGETS) {
+    try { state.results[t.key] = analyze(t.key, targets[t.key]); }
+    catch (e) { state.results[t.key] = { note: 'Analysis error: ' + e.message }; console.error(e); }
+  }
+  drawAnalysis();
+  drawTrace();
+  renderTargets();
+}
+
+(async function main() {
+  renderZoning();
+  renderTargets();
+  const bb = studyBbox();
+  L.rectangle([[bb[1], bb[0]], [bb[3], bb[2]]], { color: '#fff', weight: 1, dashArray: '4 4', fill: false, interactive: false }).addTo(map);
+  L.circleMarker(CONFIG.center, { radius: 5, color: '#000', weight: 1, fillColor: '#fff', fillOpacity: 1, interactive: false })
+    .bindTooltip('Lund pin 40.64878, -111.82808').addTo(map);
+
+  const [parcels, canal] = await Promise.all([loadParcels(), loadCanal()]);
+  state.parcels = parcels;
+  state.canalNHD = canal.feats;
+  log(canal.info, !canal.feats.length);
+  if (!parcels.length) log('No parcels loaded. The LIR service may be down or its URL may have changed (see CONFIG.parcelServices).', true);
+  if (!canal.feats.length && !state.trace.length) log('Tip: click "Trace canal" and click along the canal to draw it.');
+  drawParcels();
+  runAnalysis();
+})();
+</script>
+</body>
+</html>
